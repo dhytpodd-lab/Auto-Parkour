@@ -25,7 +25,8 @@
 1. Установите Fabric Loader для Minecraft 1.21.8
 2. Скачайте Fabric API для версии 1.21.8
 3. Поместите мод и Fabric API в папку `.minecraft/mods`
-4. Запустите игру с профилем Fabric
+4. Для настроек мода скачайте Cloth Config, иначе будет крашить игру
+5. Запустите игру с профилем Fabric
 
 ## ⚙️ Настройка
 Конфигурационный файл находится в `.minecraft/config/autoparkour.json`
@@ -39,6 +40,7 @@
 
 ## 🏗️ Сборка из исходников
 ```bash
-git clone https://github.com/yourname/autoparkour
-cd autoparkour
+git clone https://github.com/dhytpodd-lab/Auto-Parkour
+cd auto-parkour
 ./gradlew build
+//Пока тут только readme.md файлы будут доступны через:...?
