@@ -43,7 +43,7 @@
 - и многое другое в Конфигураторе....
 
 По всем вопросам/проблемам: 
-[сюда](https://github.com/dhytpodd-lab/Auto-Parkour/issues)
+[сюда](https://github.com/dhytpodd-lab/Auto-Parkour/issues) либо
 [Telegram](https://t.me/Danik_4el_2w)
 
 ## 🏗️ Сборка из исходников
