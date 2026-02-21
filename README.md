@@ -42,6 +42,10 @@
 - `diagonalmovement` - Авто-Паркур по диагоналям(опционально, но рекомендую отключить на всякий)
 - и многое другое в Конфигураторе....
 
+По всем вопросам/проблемам: 
+[сюда](https://github.com/dhytpodd-lab/Auto-Parkour/issues)
+[Telegram](https://t.me/Danik_4el_2w)
+
 ## 🏗️ Сборка из исходников
 ```bash
 git clone https://github.com/dhytpodd-lab/Auto-Parkour
