@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "autoparkour",
+  "version": "1.2.3",
+  "name": "Automatic Parkour",
+  "description": "Автоматический паркур для таких плагинов как AJP и т.д.",
+  "authors": [
+    "daniil_qq(Aboba2022)"
+  ],
+  "contact": {
+    "homepage": "https://mibombo-delta.vercel.app",
+    "sources": "https://github.com/dhytpodd-lab/Auto-Parkour",
+    "issues": "https://github.com/dhytpodd-lab/Auto-Parkour/issues"
+  },
+  "license": "MIT",
+  "icon": "assets/autoparkour/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "main": [
+      "com.autoparkour.AutoParkourMod"
+    ],
+    "client": [
+      "com.autoparkour.AutoParkourModClient"
+    ],
+    "modmenu": [
+      "com.autoparkour.config.ModMenuIntegration"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.11",
+    "minecraft": "1.21.8",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "modmenu": ">=11.0.1"
+  },
+  "custom": {
+    "modmenu:clientsideOnly": true
+  }
+}

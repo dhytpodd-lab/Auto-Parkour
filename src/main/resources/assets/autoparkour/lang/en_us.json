@@ -1,0 +1,50 @@
+{
+  "key.category.autoparkour": "Automatic Parkour",
+  "key.autoparkour.toggle": "Toggle Parkour",
+  "key.autoparkour.sprint": "Toggle Auto Sprint",
+  "key.autoparkour.hud": "Toggle HUD",
+  "key.autoparkour.jump": "Toggle Auto Jump",
+  "key.autoparkour.config": "Open Config",
+  "key.autoparkour.scan_up": "Increase Scan Range",
+  "key.autoparkour.scan_down": "Decrease Scan Range",
+
+  "text.autoparkour.enabled": "§aENABLED",
+  "text.autoparkour.disabled": "§cDISABLED",
+  "text.autoparkour.parkour_on": "AutoParkour: ON",
+  "text.autoparkour.parkour_off": "AutoParkour: OFF",
+  "text.autoparkour.sprint_on": "Sprint: ON",
+  "text.autoparkour.sprint_off": "Sprint: OFF",
+  "text.autoparkour.jump_on": "Auto-Jump: ON",
+  "text.autoparkour.jump_off": "Auto-Jump: OFF",
+
+  "config.autoparkour.title": "AutoParkour Configuration",
+  "config.autoparkour.general": "General",
+  "config.autoparkour.scanning": "Scanning",
+  "config.autoparkour.safety": "Safety",
+  "config.autoparkour.hud": "HUD",
+  "config.autoparkour.keys": "Key Bindings",
+
+  "config.autoparkour.enable": "Enable Parkour",
+  "config.autoparkour.auto_sprint": "Auto Sprint",
+  "config.autoparkour.auto_jump": "Auto Jump",
+  "config.autoparkour.debug": "Debug Mode",
+
+  "config.autoparkour.scan_range": "Scan Range",
+  "config.autoparkour.min_jump": "Min Jump Distance",
+  "config.autoparkour.max_jump": "Max Jump Distance",
+  "config.autoparkour.delay": "Block Placement Delay",
+
+  "config.autoparkour.safe_fall": "Safe Fall",
+  "config.autoparkour.fall_threshold": "Fall Damage Threshold",
+  "config.autoparkour.avoid_lava": "Avoid Lava",
+  "config.autoparkour.avoid_void": "Avoid Void",
+
+  "config.autoparkour.hud_visible": "HUD Visible",
+  "config.autoparkour.hud_x": "HUD X Position",
+  "config.autoparkour.hud_y": "HUD Y Position",
+  "config.autoparkour.hud_opacity": "HUD Opacity",
+  "config.autoparkour.hud_scale": "HUD Scale",
+  "config.autoparkour.hud_color": "HUD Color",
+  "config.autoparkour.show_coords": "Show Coordinates",
+  "config.autoparkour.show_target": "Show Target Block"
+}

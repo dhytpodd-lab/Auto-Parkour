@@ -1,0 +1,50 @@
+{
+  "key.category.autoparkour": "Автоматический паркур",
+  "key.autoparkour.toggle": "Вкл/Выкл паркур",
+  "key.autoparkour.sprint": "Вкл/Выкл авто-спринт",
+  "key.autoparkour.hud": "Вкл/Выкл HUD",
+  "key.autoparkour.jump": "Вкл/Выкл авто-прыжок",
+  "key.autoparkour.config": "Открыть настройки",
+  "key.autoparkour.scan_up": "Увеличить радиус сканирования",
+  "key.autoparkour.scan_down": "Уменьшить радиус сканирования",
+
+  "text.autoparkour.enabled": "§aВКЛ",
+  "text.autoparkour.disabled": "§cВЫКЛ",
+  "text.autoparkour.parkour_on": "Автопаркур: ВКЛ",
+  "text.autoparkour.parkour_off": "Автопаркур: ВЫКЛ",
+  "text.autoparkour.sprint_on": "Спринт: ВКЛ",
+  "text.autoparkour.sprint_off": "Спринт: ВЫКЛ",
+  "text.autoparkour.jump_on": "Авто-прыжок: ВКЛ",
+  "text.autoparkour.jump_off": "Авто-прыжок: ВЫКЛ",
+
+  "config.autoparkour.title": "Настройки AutoParkour",
+  "config.autoparkour.general": "Основные",
+  "config.autoparkour.scanning": "Сканирование",
+  "config.autoparkour.safety": "Безопасность",
+  "config.autoparkour.hud": "HUD",
+  "config.autoparkour.keys": "Клавиши",
+
+  "config.autoparkour.enable": "Включить паркур",
+  "config.autoparkour.auto_sprint": "Авто-спринт",
+  "config.autoparkour.auto_jump": "Авто-прыжок",
+  "config.autoparkour.debug": "Режим отладки",
+
+  "config.autoparkour.scan_range": "Радиус сканирования",
+  "config.autoparkour.min_jump": "Мин. дистанция прыжка",
+  "config.autoparkour.max_jump": "Макс. дистанция прыжка",
+  "config.autoparkour.delay": "Задержка постановки блоков",
+
+  "config.autoparkour.safe_fall": "Безопасное падение",
+  "config.autoparkour.fall_threshold": "Порог урона от падения",
+  "config.autoparkour.avoid_lava": "Избегать лаву",
+  "config.autoparkour.avoid_void": "Избегать пустоту",
+
+  "config.autoparkour.hud_visible": "Показывать HUD",
+  "config.autoparkour.hud_x": "Позиция X",
+  "config.autoparkour.hud_y": "Позиция Y",
+  "config.autoparkour.hud_opacity": "Прозрачность",
+  "config.autoparkour.hud_scale": "Масштаб",
+  "config.autoparkour.hud_color": "Цвет",
+  "config.autoparkour.show_coords": "Показывать координаты",
+  "config.autoparkour.show_target": "Показывать целевой блок"
+}
