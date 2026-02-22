@@ -68,3 +68,4 @@ cd auto-parkour
 
 org.gradle.java.home=/usr/lib/jvm/java-21-openjdk/
 
+либо если у вас стоит только java21 то удалить её
