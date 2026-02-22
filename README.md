@@ -37,6 +37,7 @@
 
 ## ⚙️ Настройка
 Конфигурационный файл при создании находится в `.minecraft/config/autoparkour.json`
+
 Конфигурационный файл для deeplearn при создании находится в `.minecraft/config/autoparkour_learning.json`
 
 Основные параметры:
