@@ -399,6 +399,26 @@ public class ParkourExecutor {
         // Vanilla physics: y += 0.42; if sprinting, velocity += 0.2 * look.
         player.jump();
 
+        // Vanilla sprint-jump adds +0.2 in the *look* direction. If the yaw has
+        // not fully converged to the target direction at takeoff, that bonus
+        // injects a perpendicular component which makes the trajectory curve in
+        // a small arc through the air. Project the post-takeoff horizontal
+        // velocity onto the locked takeoff direction to kill the lateral part,
+        // keeping a straight-line trajectory. We keep the forward component
+        // intact (and slightly bump it if it dropped below the pre-jump target).
+        Vec3d postVel = player.getVelocity();
+        double postForward = postVel.x * directionFlat.x + postVel.z * directionFlat.z;
+        double forwardKeep = Math.max(postForward, preForward + 0.18);
+        // Don't ever exceed what a fully aligned vanilla sprint-jump would
+        // produce — that is preForward + 0.20. Anti-cheat will flag anything
+        // above that.
+        forwardKeep = Math.min(forwardKeep, preForward + 0.205);
+        player.setVelocity(
+                directionFlat.x * forwardKeep,
+                postVel.y,
+                directionFlat.z * forwardKeep
+        );
+
         jumpCooldown = dist >= 3.0 ? 7 : 6;
         ticksOnGround = 0;
         edgeTicks = 0;
@@ -444,8 +464,11 @@ public class ParkourExecutor {
             // Vanilla W-press in air adds about 0.02 m/tick toward look direction.
             double airAccel = 0.020 * MathHelper.clamp(airControl, 0.70f, 1.10f);
 
-            // Damp lateral drift gently so we still land on the target line.
-            double lateralKill = diagonalTarget ? 0.08 : 0.14;
+            // Damp lateral drift so we still land on the target line. A bit
+            // stronger than before because we now also do a hard project at
+            // takeoff — this just kills any drift introduced by air control
+            // between ticks.
+            double lateralKill = diagonalTarget ? 0.16 : 0.22;
 
             player.setVelocity(
                     v.x + useDx * airAccel - sideX * lateralKill,
@@ -453,6 +476,48 @@ public class ParkourExecutor {
                     v.z + useDz * airAccel - sideZ * lateralKill
             );
             return;
+        }
+
+        // If we just landed on this block and we are sitting off-center along the
+        // axis perpendicular to the next jump direction, nudge ourselves back
+        // onto the line first. Otherwise the next jump fires from the side of
+        // the block and either undershoots laterally or has to fight a lateral
+        // velocity component all the way through the air.
+        if (ticksOnGround > 0 && ticksOnGround <= 3) {
+            BlockPos support = getSupportBlock(player);
+            double centerX = support.getX() + 0.5;
+            double centerZ = support.getZ() + 0.5;
+            double offsetX = pos.x - centerX;
+            double offsetZ = pos.z - centerZ;
+            // Lateral component = offset perpendicular to (dx, dz).
+            double lateralOffset = offsetX * (-dz) + offsetZ * dx;
+            if (Math.abs(lateralOffset) > 0.22) {
+                // Pull perpendicular to target direction, toward the target line.
+                double pullX = -lateralOffset * (-dz);
+                double pullZ = -lateralOffset * dx;
+                double pullMag = Math.hypot(pullX, pullZ);
+                if (pullMag > 0.0001) {
+                    pullX /= pullMag;
+                    pullZ /= pullMag;
+                    // Blend the lateral pull into the forward direction so the
+                    // player still advances toward the target while correcting.
+                    double blendForward = 0.55;
+                    double blendSide = 0.55;
+                    double moveX = dx * blendForward + pullX * blendSide;
+                    double moveZ = dz * blendForward + pullZ * blendSide;
+                    double moveMag = Math.hypot(moveX, moveZ);
+                    if (moveMag > 0.0001) {
+                        moveX /= moveMag;
+                        moveZ /= moveMag;
+                    }
+                    Vec3d vCorrect = player.getVelocity();
+                    double correctSpeed = 0.135;
+                    double newCx = vCorrect.x + MathHelper.clamp(moveX * correctSpeed - vCorrect.x, -0.10, 0.10);
+                    double newCz = vCorrect.z + MathHelper.clamp(moveZ * correctSpeed - vCorrect.z, -0.10, 0.10);
+                    player.setVelocity(newCx, vCorrect.y, newCz);
+                    return;
+                }
+            }
         }
 
         // Ground: ramp toward vanilla sprint speed (~0.28) so player.jump() can
