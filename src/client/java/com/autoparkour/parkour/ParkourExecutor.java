@@ -160,9 +160,13 @@ public class ParkourExecutor {
         double dot = (toTargetFlat.length() > 0.1 && lookFlat.length() > 0.1) ? lookFlat.dotProduct(toTargetFlat) : 1.0;
 
         if (config.isAutoSprintEnabled() && sprintCooldown <= 0) {
-            boolean shouldSprint = (horizDist > 1.45 && dot > 0.35) || (isOnEdge && horizDist > 1.15);
-            if (horizDist >= 2.8 && dot > 0.25) shouldSprint = true;
-            if (horizDist < 1.15) shouldSprint = false;
+            // Only sprint when we actually need a sprint-jump (>= ~2 block distance).
+            // For 1-block targets, sprint+jump overshoots significantly because the
+            // vanilla sprint-jump bonus (+0.2 in look direction) is too much for a
+            // short hop.
+            boolean shouldSprint = (horizDist > 1.75 && dot > 0.35) || (isOnEdge && horizDist > 1.55);
+            if (horizDist >= 2.5 && dot > 0.25) shouldSprint = true;
+            if (horizDist < 1.55) shouldSprint = false;
 
             if (learning.getSprintReliability() < 0.7f && shouldSprint && horizDist < 2.8) {
                 shouldSprint = false;
@@ -302,7 +306,12 @@ public class ParkourExecutor {
 
     private boolean updateJumpPolicy(ClientPlayerEntity player, ModConfig config,
                                      double dist, double height, boolean onEdge, double dot, boolean diagonalTarget) {
-        if (!config.isAutoJumpEnabled() || jumpCooldown > 0 || !player.isOnGround() || ticksOnGround < 1) {
+        // Require a minimum amount of ramp-up time on the ground so the player has
+        // time to (a) rotate yaw onto the target and (b) build up horizontal
+        // velocity via moveTowards. Otherwise the jump fires with near-zero forward
+        // speed and undershoots.
+        int minGroundTicks = dist >= 2.80 ? 4 : 3;
+        if (!config.isAutoJumpEnabled() || jumpCooldown > 0 || !player.isOnGround() || ticksOnGround < minGroundTicks) {
             return false;
         }
 
@@ -337,10 +346,11 @@ public class ParkourExecutor {
                              double dist, double height, ModConfig config, boolean diagonalTarget, boolean onEdge) {
         if (directionFlat.length() < 0.1) return;
 
-        // Sprint for any non-trivial jump so vanilla sprint-jump adds its +0.2 boost
-        // in the look direction — that is the only anti-cheat-safe way to actually
-        // gain horizontal speed at takeoff.
-        if (config.isAutoSprintEnabled() && dist > 0.9) {
+        // Sprint+jump adds +0.2 to horizontal velocity in look direction. That is
+        // exactly what we need for 2/3/4 block jumps. For 1-block jumps it is too
+        // much (overshoots), so don't sprint there — a plain walk-jump reaches a
+        // 1-block target cleanly.
+        if (config.isAutoSprintEnabled() && dist > 1.70) {
             player.setSprinting(true);
         }
 
@@ -447,10 +457,13 @@ public class ParkourExecutor {
 
         // Ground: ramp toward vanilla sprint speed (~0.28) so player.jump() can
         // produce a full sprint-jump trajectory without us having to spike velocity
-        // at takeoff.
+        // at takeoff. We must use a per-tick velocity delta comparable to vanilla
+        // sprint acceleration (~0.13 m/tick) — the previous 0.028 m/tick was
+        // dominated by ground friction (~0.546 retention/tick) and the player
+        // never actually reached sprint speed.
         double speed = 0.145;
         if (onEdge) speed = 0.175;
-        if (player.isSprinting()) speed += 0.060;
+        if (player.isSprinting()) speed += 0.085;
         if (dist > 2.5) speed += 0.020;
         if (dist > 3.4) speed += 0.012;
         if (diagonalTarget && dist > 1.25) speed += 0.014;
@@ -460,7 +473,9 @@ public class ParkourExecutor {
         Vec3d v = player.getVelocity();
         double desiredX = dx * speed;
         double desiredZ = dz * speed;
-        double maxDelta = diagonalTarget ? 0.032 : 0.028;
+        // Vanilla sprint accel is roughly 0.13 m/tick, so this stays inside what
+        // server-side movement validators expect.
+        double maxDelta = diagonalTarget ? 0.135 : 0.130;
         double newX = v.x + MathHelper.clamp(desiredX - v.x, -maxDelta, maxDelta);
         double newZ = v.z + MathHelper.clamp(desiredZ - v.z, -maxDelta, maxDelta);
         player.setVelocity(newX, v.y, newZ);
