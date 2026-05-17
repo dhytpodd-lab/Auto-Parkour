@@ -10,7 +10,11 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 
 public class ParkourManager {
 
@@ -24,17 +28,14 @@ public class ParkourManager {
     private Vec3d lastPlayerPos = Vec3d.ZERO;
     private int targetSwitchCooldown = 0;
 
-    // Блокировка цели в воздухе
     private BlockPos airTargetLock = null;
     private int airTargetLockTicks = 0;
-    private static final int AIR_LOCK_DURATION = 140;
+    private static final int AIR_LOCK_DURATION = 70;
 
-    // Защита от пропавших блоков
     private BlockPos lastJumpedFromBlock = null;
     private int lastJumpCooldown = 0;
-    private static final int JUMP_COOLDOWN_TICKS = 55;
+    private static final int JUMP_COOLDOWN_TICKS = 45;
 
-    // Флаг для отслеживания прыжка
     private boolean jumpJustPerformed = false;
 
     private final ParkourExecutor executor;
@@ -42,10 +43,16 @@ public class ParkourManager {
     private final MovementHelper movementHelper;
     private final ModConfig config;
 
-    // Защита от пропавших блоков
     private BlockPos lastTargetBeforeJump = null;
     private int lastTargetCooldown = 0;
-    private static final int LAST_TARGET_COOLDOWN_TICKS = 40; // 2 секунды
+    private static final int LAST_TARGET_COOLDOWN_TICKS = 35;
+
+    private final Map<BlockPos, Integer> vanishedTargets = new HashMap<>();
+    private static final int VANISHED_TARGET_COOLDOWN_TICKS = 90;
+
+    private static final double LONG_JUMP_MIN_DISTANCE = 2.75;
+    private static final double LONG_JUMP_IDEAL_DISTANCE = 3.55;
+    private static final double LONG_JUMP_MAX_DISTANCE = 4.35;
 
     public ParkourManager() {
         this.config = AutoParkourMod.getInstance().getConfigManager().getConfig();
@@ -57,41 +64,49 @@ public class ParkourManager {
     public void tick(MinecraftClient client) {
         if (client.player == null || client.world == null) return;
 
-        // Детекция резкого перемещения (телепорт)
-        if (lastPlayerPos != Vec3d.ZERO) {
-            double movementSpeed = client.player.getPos().squaredDistanceTo(lastPlayerPos);
+        ClientPlayerEntity player = client.player;
+        Vec3d currentPos = player.getPos();
+        Vec3d previousPos = lastPlayerPos;
+
+        if (!previousPos.equals(Vec3d.ZERO)) {
+            double movementSpeed = currentPos.squaredDistanceTo(previousPos);
             if (movementSpeed > 100) {
                 executor.onTeleport();
-                currentTargetBlock = null;
-                airTargetLock = null;
-                lastJumpedFromBlock = null;
+                clearDynamicTargets();
                 if (config.isDebugMode()) {
-                    AutoParkourMod.getInstance().getLogger().debug("Teleport detected, resetting target");
+                    AutoParkourMod.getInstance().getLogger().debug("Teleport detected, resetting parkour targets");
                 }
             }
         }
-        lastPlayerPos = client.player.getPos();
 
         tickCounter++;
         if (targetSwitchCooldown > 0) targetSwitchCooldown--;
         if (lastJumpCooldown > 0) lastJumpCooldown--;
+        if (lastTargetCooldown > 0) lastTargetCooldown--;
+        tickVanishedTargets();
 
-        // Обновление блокировки цели в воздухе
         if (airTargetLock != null) {
             airTargetLockTicks--;
-            if (airTargetLockTicks <= 0 || client.player.isOnGround()) {
+            if (airTargetLockTicks <= 0 || player.isOnGround() || !isTargetValid(player, client.world, airTargetLock)) {
+                if (!isTargetValid(player, client.world, airTargetLock)) {
+                    markVanishedTarget(airTargetLock);
+                }
                 airTargetLock = null;
                 if (config.isDebugMode()) {
                     AutoParkourMod.getInstance().getLogger().debug("Air target lock released");
                 }
             }
         }
-        if (lastTargetCooldown > 0) lastTargetCooldown--;
-        if (enabled && currentTargetBlock != null) {
-            Vec3d currentPos = client.player.getPos();
-            if (lastPlayerPos.squaredDistanceTo(currentPos) < 0.001) {
+
+        if (enabled && currentTargetBlock != null && !previousPos.equals(Vec3d.ZERO)) {
+            if (previousPos.squaredDistanceTo(currentPos) < 0.0008) {
                 stuckTicks++;
-                if (stuckTicks > 30) {
+                if (stuckTicks > 8 && player.isOnGround()) {
+                    executor.resetCooldowns();
+                    targetSwitchCooldown = 0;
+                    stuckTicks = 0;
+                } else if (stuckTicks > 30) {
+                    markVanishedTarget(currentTargetBlock);
                     currentTargetBlock = null;
                     airTargetLock = null;
                     stuckTicks = 0;
@@ -102,8 +117,10 @@ public class ParkourManager {
         }
 
         if (enabled) {
-            performParkour(client.player, client.world);
+            performParkour(player, client.world);
         }
+
+        lastPlayerPos = currentPos;
     }
 
     private void performParkour(ClientPlayerEntity player, World world) {
@@ -114,261 +131,245 @@ public class ParkourManager {
             return;
         }
 
-        // Сканируем блоки
-        List<BlockPos> nearbyBlocks = blockScanner.scanNearbyBlocks(player, world, config.getMaxScanRange() + 1);
-
-        // Фильтруем блоки, с которых только что прыгнули
-        if (lastJumpedFromBlock != null && lastJumpCooldown > 0) {
-            nearbyBlocks.removeIf(block -> block.equals(lastJumpedFromBlock));
+        if (currentTargetBlock != null && !isTargetValid(player, world, currentTargetBlock)) {
+            BlockPos vanishedTarget = currentTargetBlock;
+            markVanishedTarget(vanishedTarget);
             if (config.isDebugMode()) {
-                AutoParkourMod.getInstance().getLogger().debug("Filtered out last jumped block: " + lastJumpedFromBlock.toShortString());
+                AutoParkourMod.getInstance().getLogger().debug("Target vanished, skipping: " + vanishedTarget.toShortString());
             }
+            currentTargetBlock = null;
+            airTargetLock = null;
+            isParkouring = false;
         }
 
-        if (nearbyBlocks.isEmpty()) {
-            noBlockTicks++;
-            if (noBlockTicks > 15) {
-                if (config.isDebugMode()) {
-                    AutoParkourMod.getInstance().getLogger().debug("No blocks nearby");
-                }
-                noBlockTicks = 0;
-            }
-            return;
-        } else {
-            noBlockTicks = 0;
-        }
+        int scanRange = Math.max(config.getMaxScanRange() + 1, Math.max(5, config.getMaxJumpDistance() + 1));
+        List<BlockPos> nearbyBlocks = blockScanner.scanNearbyBlocks(player, world, scanRange);
+        filterCandidateBlocks(player, world, nearbyBlocks);
 
-        // Если мы в воздухе и есть заблокированная цель - используем её
         if (!player.isOnGround() && airTargetLock != null) {
-            boolean targetExists = false;
-            for (BlockPos block : nearbyBlocks) {
-                if (block.equals(airTargetLock)) {
-                    targetExists = true;
-                    break;
-                }
-            }
-
-            if (targetExists) {
+            if (isTargetValid(player, world, airTargetLock)) {
                 currentTargetBlock = airTargetLock;
                 isParkouring = true;
                 executor.executeMovement(player, airTargetLock, config);
                 return;
-            } else {
-                airTargetLock = null;
             }
-        }
-// Фильтруем блоки, с которых только что прыгнули
-if (lastJumpedFromBlock != null && lastJumpCooldown > 0) {
-    nearbyBlocks.removeIf(block -> block.equals(lastJumpedFromBlock));
-    if (config.isDebugMode()) {
-        AutoParkourMod.getInstance().getLogger().debug("Filtered out last jumped block: " + lastJumpedFromBlock.toShortString());
-    }
-}
 
-// НОВОЕ: Фильтруем предыдущую цель, если она в кулдауне
-if (lastTargetBeforeJump != null && lastTargetCooldown > 0) {
-    nearbyBlocks.removeIf(block -> block.equals(lastTargetBeforeJump));
-    if (config.isDebugMode()) {
-        AutoParkourMod.getInstance().getLogger().debug("Filtered out last target: " + lastTargetBeforeJump.toShortString());
-    }
-}
-        // Находим оптимальную цель с учётом preferStraightDirections
+            markVanishedTarget(airTargetLock);
+            airTargetLock = null;
+            currentTargetBlock = null;
+            isParkouring = false;
+            return;
+        }
+
+        if (nearbyBlocks.isEmpty()) {
+            noBlockTicks++;
+            isParkouring = false;
+            if (noBlockTicks > 15) {
+                if (config.isDebugMode()) {
+                    AutoParkourMod.getInstance().getLogger().debug("No valid parkour blocks nearby");
+                }
+                noBlockTicks = 0;
+            }
+            return;
+        }
+        noBlockTicks = 0;
+
         BlockPos targetBlock = findOptimalTargetBlock(player, nearbyBlocks, world);
 
-        if (targetBlock != null) {
-            // Если мы на земле - можем менять цель свободно
-            // Если мы на земле - можем менять цель свободно
-if (player.isOnGround()) {
-    if (!targetBlock.equals(currentTargetBlock) && targetSwitchCooldown <= 0) {
-        // Сохраняем предыдущую цель перед сменой
-        if (currentTargetBlock != null) {
-            lastTargetBeforeJump = currentTargetBlock;
-            lastTargetCooldown = LAST_TARGET_COOLDOWN_TICKS;
+        if (targetBlock == null) {
+            isParkouring = false;
+            if (player.isOnGround() && currentTargetBlock != null && targetSwitchCooldown <= 0) {
+                lastTargetBeforeJump = currentTargetBlock;
+                lastTargetCooldown = LAST_TARGET_COOLDOWN_TICKS;
+                currentTargetBlock = null;
+            }
+            return;
         }
 
-        lastTargetBlock = currentTargetBlock;
-        currentTargetBlock = targetBlock;
-        targetSwitchCooldown = 3;
+        if (player.isOnGround()) {
+            if (!targetBlock.equals(currentTargetBlock) && targetSwitchCooldown <= 0) {
+                if (currentTargetBlock != null) {
+                    lastTargetBeforeJump = currentTargetBlock;
+                    lastTargetCooldown = LAST_TARGET_COOLDOWN_TICKS;
+                }
 
-        if (config.isDebugMode()) {
-            AutoParkourMod.getInstance().getLogger().debug("New target on ground: " + targetBlock.toShortString());
-        }
-    }
-}
-            // Если мы в воздухе - блокируем первую цель
-            else if (currentTargetBlock == null) {
+                lastTargetBlock = currentTargetBlock;
                 currentTargetBlock = targetBlock;
-                airTargetLock = targetBlock;
-                airTargetLockTicks = AIR_LOCK_DURATION;
+                targetSwitchCooldown = horizontalDistanceToBlockCenter(player.getPos(), targetBlock) >= LONG_JUMP_MIN_DISTANCE ? 2 : 3;
+
                 if (config.isDebugMode()) {
-                    AutoParkourMod.getInstance().getLogger().debug("Air target locked: " + targetBlock.toShortString());
+                    AutoParkourMod.getInstance().getLogger().debug("New target: " + targetBlock.toShortString());
                 }
             }
-
-            if (currentTargetBlock != null) {
-                isParkouring = true;
-
-                // Запоминаем блок при прыжке
-                if (jumpJustPerformed && player.isOnGround()) {
-                    jumpJustPerformed = false;
-                }
-
-                if (!player.isOnGround() && lastPlayerPos.y < player.getY() + 0.1 && !jumpJustPerformed) {
-                    lastJumpedFromBlock = player.getBlockPos().down();
-                    lastJumpCooldown = JUMP_COOLDOWN_TICKS;
-                    jumpJustPerformed = true;
-                    if (config.isDebugMode()) {
-                        AutoParkourMod.getInstance().getLogger().debug("Jump detected from: " + lastJumpedFromBlock.toShortString());
-                    }
-                }
-
-                executor.executeMovement(player, currentTargetBlock, config);
+        } else if (currentTargetBlock == null) {
+            currentTargetBlock = targetBlock;
+            airTargetLock = targetBlock;
+            airTargetLockTicks = AIR_LOCK_DURATION;
+            if (config.isDebugMode()) {
+                AutoParkourMod.getInstance().getLogger().debug("Air target locked: " + targetBlock.toShortString());
             }
-        } else {
-    isParkouring = false;
-    if (currentTargetBlock != null && targetSwitchCooldown <= 0 && player.isOnGround()) {
-        // Сохраняем цель перед сбросом
-        lastTargetBeforeJump = currentTargetBlock;
-        lastTargetCooldown = LAST_TARGET_COOLDOWN_TICKS;
-        currentTargetBlock = null;
+        }
+
+        if (currentTargetBlock != null && isTargetValid(player, world, currentTargetBlock)) {
+            updateJumpSourceTracking(player);
+            isParkouring = true;
+            executor.executeMovement(player, currentTargetBlock, config);
+        } else if (currentTargetBlock != null) {
+            markVanishedTarget(currentTargetBlock);
+            currentTargetBlock = null;
+            airTargetLock = null;
+            isParkouring = false;
+        }
     }
-}
+
+    private void filterCandidateBlocks(ClientPlayerEntity player, World world, List<BlockPos> blocks) {
+        BlockPos standingBlock = player.getBlockPos().down();
+
+        blocks.removeIf(block ->
+                block == null ||
+                block.equals(standingBlock) ||
+                isVanishedTarget(block) ||
+                (lastJumpedFromBlock != null && lastJumpCooldown > 0 && block.equals(lastJumpedFromBlock)) ||
+                (lastTargetBeforeJump != null && lastTargetCooldown > 0 && block.equals(lastTargetBeforeJump)) ||
+                !isBlockReachable(player, block, world) ||
+                !blockScanner.isLandingStillValid(player, world, block, config)
+        );
     }
 
     private BlockPos findOptimalTargetBlock(ClientPlayerEntity player, List<BlockPos> blocks, World world) {
-    if (blocks.isEmpty()) return null;
+        if (blocks.isEmpty()) return null;
 
-    Vec3d playerPos = player.getPos();
-    BlockPos playerBlockPos = player.getBlockPos();
+        BlockPos bestBlock = null;
+        double bestScore = Double.MAX_VALUE;
 
-    // Удаляем блок под игроком
-    blocks.removeIf(block -> block.equals(playerBlockPos.down()));
+        for (BlockPos block : new ArrayList<>(blocks)) {
+            if (!isTargetValid(player, world, block)) continue;
 
-    if (blocks.isEmpty()) return null;
-
-    // Разделяем блоки на прямые и диагональные
-    List<BlockPos> straightBlocks = new ArrayList<>();
-    List<BlockPos> diagonalBlocks = new ArrayList<>();
-
-    for (BlockPos block : blocks) {
-        double heightDiff = block.getY() - playerPos.y;
-        double distance = Math.sqrt(block.getSquaredDistance(playerPos));
-
-        boolean isValidHeight = heightDiff > -3.0 && heightDiff < 4.0;
-        boolean isValidDistance = distance > 0.3 && distance < config.getMaxJumpDistance() + 2.0;
-
-        if (!isValidHeight || !isValidDistance) continue;
-
-        int dx = block.getX() - playerBlockPos.getX();
-        int dz = block.getZ() - playerBlockPos.getZ();
-
-        if (dx == 0 || dz == 0) {
-            straightBlocks.add(block);
-        } else if (dx != 0 && dz != 0) {
-            diagonalBlocks.add(block);
-        }
-    }
-
-        // Выбираем список в зависимости от настройки preferStraightDirections
-        List<BlockPos> preferredList;
-        List<BlockPos> fallbackList;
-
-        if (config.isPreferStraightDirections()) {
-            preferredList = straightBlocks;
-            fallbackList = diagonalBlocks;
-        } else {
-            preferredList = diagonalBlocks;
-            fallbackList = straightBlocks;
-        }
-
-        // Сортируем предпочтительный список по расстоянию
-        // Сортируем предпочтительный список с бонусом для прямых направлений
-// Сортируем предпочтительный список по расстоянию с жёстким штрафом за диагональ
-// Сортируем предпочтительный список с МАКСИМАЛЬНЫМ штрафом за диагональ
-if (!preferredList.isEmpty()) {
-    preferredList.sort((a, b) -> {
-        double distA = a.getSquaredDistance(playerPos);
-        double distB = b.getSquaredDistance(playerPos);
-
-        // Определяем, является ли блок диагональным
-        int dxA = a.getX() - playerBlockPos.getX();
-        int dzA = a.getZ() - playerBlockPos.getZ();
-        int dxB = b.getX() - playerBlockPos.getX();
-        int dzB = b.getZ() - playerBlockPos.getZ();
-
-        boolean isDiagonalA = dxA != 0 && dzA != 0;
-        boolean isDiagonalB = dxB != 0 && dzB != 0;
-
-        // МАКСИМАЛЬНЫЙ ШТРАФ для диагоналей
-        if (isDiagonalA) {
-            distA *= 100.0; // Огромный штраф
-        }
-        if (isDiagonalB) {
-            distB *= 100.0;
-        }
-
-        return Double.compare(distA, distB);
-    });
-
-    // Проверяем доступность
-    for (BlockPos block : preferredList) {
-        // Пропускаем диагональные блоки полностью
-        int dx = block.getX() - playerBlockPos.getX();
-        int dz = block.getZ() - playerBlockPos.getZ();
-        boolean isDiagonal = dx != 0 && dz != 0;
-
-        if (isDiagonal && config.isPreferStraightDirections()) {
-            continue; // Не берём диагонали вообще
-        }
-
-        if (isBlockReachable(player, block, world)) {
-            return block;
-        }
-    }
-
-    // Если ничего не нашли, пробуем первый в списке (но без диагоналей)
-    for (BlockPos block : preferredList) {
-        int dx = block.getX() - playerBlockPos.getX();
-        int dz = block.getZ() - playerBlockPos.getZ();
-        boolean isDiagonal = dx != 0 && dz != 0;
-
-        if (!isDiagonal) {
-            return block;
-        }
-    }
-
-    // Если остались только диагонали, возвращаем null
-    return null;
-}
-
-        // Если предпочтительный список пуст, используем запасной
-        if (!fallbackList.isEmpty()) {
-            fallbackList.sort((a, b) -> {
-                double distA = a.getSquaredDistance(playerPos);
-                double distB = b.getSquaredDistance(playerPos);
-                return Double.compare(distA, distB);
-            });
-
-            for (BlockPos block : fallbackList) {
-                if (isBlockReachable(player, block, world)) {
-                    return block;
-                }
+            double score = scoreTarget(player, world, block);
+            if (score < bestScore) {
+                bestScore = score;
+                bestBlock = block;
             }
-
-            return fallbackList.get(0);
         }
 
-        return null;
+        return bestBlock;
+    }
+
+    private double scoreTarget(ClientPlayerEntity player, World world, BlockPos block) {
+        Vec3d playerPos = player.getPos();
+        BlockPos playerBlockPos = player.getBlockPos();
+
+        double horizontal = horizontalDistanceToBlockCenter(playerPos, block);
+        double heightDiff = (block.getY() + 1.0) - playerPos.y;
+        boolean diagonal = isDiagonal(playerBlockPos, block);
+
+        double maxJump = Math.max(config.getMaxJumpDistance(), 4);
+        double idealDistance = Math.min(Math.max(LONG_JUMP_IDEAL_DISTANCE, config.getMinJumpDistance() + 0.75), maxJump + 0.05);
+
+        double score = Math.abs(horizontal - idealDistance) * 1.45;
+        score += Math.abs(heightDiff) * 1.15;
+
+        if (horizontal >= LONG_JUMP_MIN_DISTANCE && horizontal <= LONG_JUMP_MAX_DISTANCE) {
+            score -= 2.35;
+        } else if (horizontal >= 2.15 && horizontal < LONG_JUMP_MIN_DISTANCE) {
+            score -= 0.8;
+        } else if (horizontal < Math.max(1.15, config.getMinJumpDistance())) {
+            score += 2.0;
+        }
+
+        Vec3d toTarget = normalizeFlat(new Vec3d(block.getX() + 0.5 - playerPos.x, 0.0, block.getZ() + 0.5 - playerPos.z));
+        Vec3d look = normalizeFlat(player.getRotationVec(1.0F));
+        if (toTarget.length() > 0.1 && look.length() > 0.1) {
+            double dot = look.dotProduct(toTarget);
+            score -= dot * 1.25;
+            if (dot < -0.15) score += 2.4;
+        }
+
+        if (diagonal) {
+            if (!config.isAllowDiagonalMovement()) {
+                return Double.MAX_VALUE;
+            }
+            int absDx = Math.abs(block.getX() - playerBlockPos.getX());
+            int absDz = Math.abs(block.getZ() - playerBlockPos.getZ());
+            double imbalance = Math.abs(absDx - absDz);
+            score += config.isPreferStraightDirections() ? 0.55 : -0.40;
+            score += imbalance * 0.24;
+            if (horizontal >= 2.40 && horizontal <= 4.25) score -= 0.45;
+            if (horizontal > 4.45) score += 1.75;
+        } else {
+            score += config.isPreferStraightDirections() ? -0.45 : 0.20;
+        }
+
+        if (!movementHelper.isPathClear(player, block, world)) {
+            score += 4.2;
+        }
+
+        Block targetBlock = world.getBlockState(block).getBlock();
+        if (blockScanner.isPreferredBlock(targetBlock)) {
+            score -= 0.2;
+        }
+
+        if (currentTargetBlock != null && currentTargetBlock.equals(block)) {
+            score -= 0.65;
+        }
+
+        if (lastTargetBlock != null && lastTargetBlock.equals(block)) {
+            score += 0.25;
+        }
+
+        return score;
     }
 
     private boolean isBlockReachable(ClientPlayerEntity player, BlockPos block, World world) {
-        double distance = Math.sqrt(block.getSquaredDistance(player.getPos()));
-        if (distance > config.getMaxJumpDistance() + 0.5) return false;
+        if (player == null || block == null || world == null) return false;
 
-        double heightDiff = block.getY() - player.getY();
-        if (heightDiff > 2.0 || heightDiff < -2.5) return false;
+        if (!config.isAllowDiagonalMovement() && isDiagonal(player.getBlockPos(), block)) {
+            return false;
+        }
 
-        return true;
+        double horizontal = horizontalDistanceToBlockCenter(player.getPos(), block);
+        boolean diagonal = isDiagonal(player.getBlockPos(), block);
+        double maxJump = Math.max(config.getMaxJumpDistance(), 4) + (diagonal ? 0.70 : 0.35);
+        if (horizontal > maxJump) return false;
+        if (horizontal < 0.55) return false;
+
+        double heightDiff = (block.getY() + 1.0) - player.getY();
+        if (heightDiff > 1.25 || heightDiff < -3.25) return false;
+
+        if (diagonal && horizontal > 4.70) {
+            return false;
+        }
+
+        return blockScanner.isLandingStillValid(player, world, block, config);
+    }
+
+    private boolean isTargetValid(ClientPlayerEntity player, World world, BlockPos block) {
+        return block != null &&
+                !isVanishedTarget(block) &&
+                isBlockReachable(player, block, world) &&
+                blockScanner.isLandingStillValid(player, world, block, config);
+    }
+
+    private void updateJumpSourceTracking(ClientPlayerEntity player) {
+        if (player.isOnGround()) {
+            jumpJustPerformed = false;
+            return;
+        }
+
+        if (!jumpJustPerformed && !lastPlayerPos.equals(Vec3d.ZERO) && player.getY() > lastPlayerPos.y + 0.015) {
+            lastJumpedFromBlock = player.getBlockPos().down().toImmutable();
+            lastJumpCooldown = JUMP_COOLDOWN_TICKS;
+            jumpJustPerformed = true;
+
+            if (currentTargetBlock != null) {
+                lastTargetBeforeJump = currentTargetBlock;
+                lastTargetCooldown = LAST_TARGET_COOLDOWN_TICKS;
+            }
+
+            if (config.isDebugMode()) {
+                AutoParkourMod.getInstance().getLogger().debug("Jump started from: " + lastJumpedFromBlock.toShortString());
+            }
+        }
     }
 
     private boolean isSafe(ClientPlayerEntity player, World world) {
@@ -394,7 +395,7 @@ if (!preferredList.isEmpty()) {
             for (int z = -3; z <= 3; z++) {
                 for (int y = -2; y <= 2; y++) {
                     BlockPos checkPos = playerPos.add(x, y, z);
-                    if (blockScanner.isSafeBlock(world.getBlockState(checkPos).getBlock())) {
+                    if (!isVanishedTarget(checkPos) && blockScanner.isLandingStillValid(player, world, checkPos, config)) {
                         executor.tryReachNearestBlock(player, checkPos, config);
                         return;
                     }
@@ -403,6 +404,57 @@ if (!preferredList.isEmpty()) {
         }
 
         movementHelper.safeFall(player);
+    }
+
+    private void markVanishedTarget(BlockPos block) {
+        if (block == null) return;
+        vanishedTargets.put(block.toImmutable(), VANISHED_TARGET_COOLDOWN_TICKS);
+        if (currentTargetBlock != null && currentTargetBlock.equals(block)) currentTargetBlock = null;
+        if (airTargetLock != null && airTargetLock.equals(block)) airTargetLock = null;
+    }
+
+    private boolean isVanishedTarget(BlockPos block) {
+        return block != null && vanishedTargets.containsKey(block);
+    }
+
+    private void tickVanishedTargets() {
+        Iterator<Map.Entry<BlockPos, Integer>> iterator = vanishedTargets.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<BlockPos, Integer> entry = iterator.next();
+            int ticksLeft = entry.getValue() - 1;
+            if (ticksLeft <= 0) {
+                iterator.remove();
+            } else {
+                entry.setValue(ticksLeft);
+            }
+        }
+    }
+
+    private void clearDynamicTargets() {
+        currentTargetBlock = null;
+        airTargetLock = null;
+        lastJumpedFromBlock = null;
+        lastTargetBeforeJump = null;
+        vanishedTargets.clear();
+        targetSwitchCooldown = 0;
+        lastJumpCooldown = 0;
+        lastTargetCooldown = 0;
+    }
+
+    private boolean isDiagonal(BlockPos from, BlockPos to) {
+        return from != null && to != null && from.getX() != to.getX() && from.getZ() != to.getZ();
+    }
+
+    private Vec3d normalizeFlat(Vec3d vector) {
+        Vec3d flat = new Vec3d(vector.x, 0.0, vector.z);
+        if (flat.length() < 0.0001) return Vec3d.ZERO;
+        return flat.normalize();
+    }
+
+    private double horizontalDistanceToBlockCenter(Vec3d from, BlockPos block) {
+        double dx = block.getX() + 0.5 - from.x;
+        double dz = block.getZ() + 0.5 - from.z;
+        return Math.hypot(dx, dz);
     }
 
     private void handleNoBlocksNearby(ClientPlayerEntity player) {}
@@ -427,6 +479,16 @@ if (!preferredList.isEmpty()) {
         this.jumpJustPerformed = false;
         this.lastTargetBeforeJump = null;
         this.lastTargetCooldown = 0;
+        this.vanishedTargets.clear();
+        executor.resetCooldowns();
+    }
+
+
+
+    public void reloadRuntimeConfig() {
+        clearDynamicTargets();
+        reset();
+        executor.reloadLearning();
     }
 
     public boolean isEnabled() {

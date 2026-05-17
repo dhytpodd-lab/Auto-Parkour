@@ -25,21 +25,28 @@ public class ConfigManager {
         this.config = new ModConfig();
     }
 
-    public void loadConfig() {
+    public boolean loadConfig() {
         AutoParkourMod.getInstance().getLogger().info("Loading configuration from: " + configPath);
+        boolean loaded = true;
 
         if (Files.exists(configPath)) {
             try (Reader reader = new FileReader(configPath.toFile())) {
                 ModConfig loadedConfig = gson.fromJson(reader, ModConfig.class);
                 if (loadedConfig != null) {
-                    config = loadedConfig;
+                    config.copyFrom(loadedConfig);
                     AutoParkourMod.getInstance().getLogger().info("Configuration loaded successfully");
                 } else {
-                    AutoParkourMod.getInstance().getLogger().warn("Config file is empty, using defaults");
+                    AutoParkourMod.getInstance().getLogger().warn("Config file is empty, using current/default values");
+                    loaded = false;
                 }
             } catch (IOException e) {
                 AutoParkourMod.getInstance().getLogger().error("Failed to load config: " + e.getMessage());
                 e.printStackTrace();
+                loaded = false;
+            } catch (RuntimeException e) {
+                AutoParkourMod.getInstance().getLogger().error("Failed to parse config: " + e.getMessage());
+                e.printStackTrace();
+                loaded = false;
             }
         } else {
             AutoParkourMod.getInstance().getLogger().info("Config file not found, creating with defaults");
@@ -47,6 +54,7 @@ public class ConfigManager {
         }
 
         validateConfig();
+        return loaded;
     }
 
     public void saveConfig() {
@@ -116,8 +124,14 @@ public class ConfigManager {
         return config;
     }
 
+    public boolean reloadConfig() {
+        boolean loaded = loadConfig();
+        AutoParkourMod.getInstance().getLogger().info("Configuration reload " + (loaded ? "completed" : "finished with warnings"));
+        return loaded;
+    }
+
     public void resetToDefaults() {
-        this.config = new ModConfig();
+        this.config.copyFrom(new ModConfig());
         saveConfig();
         AutoParkourMod.getInstance().getLogger().info("Configuration reset to defaults");
     }
