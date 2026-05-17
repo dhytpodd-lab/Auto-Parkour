@@ -4,6 +4,7 @@ import com.autoparkour.AutoParkourMod;
 import net.minecraft.util.Identifier;
 
 import java.awt.*;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -16,18 +17,18 @@ public class ModConfig {
     private boolean debugMode = false;
 
     // Настройки паркура
-    private int maxScanRange = 6;
-    private int minJumpDistance = 2;
+    private int maxScanRange = 5;
+    private int minJumpDistance = 1;
     private int maxJumpDistance = 4;
-    private int blockPlacementDelay = 2;
+    private int blockPlacementDelay = 1;
     private double blockPlacementHeight = 0.5;
 
     // НОВЫЕ НАСТРОЙКИ ДВИЖЕНИЯ
-    private boolean allowDiagonalMovement = false;
+    private boolean allowDiagonalMovement = true;
     private boolean preventOvershoot = true;
-    private boolean autoLookAtTarget = false;
-    private double lookSpeed = 5.0;
-    private boolean preferStraightDirections = true; // НОВОЕ ПОЛЕ
+    private boolean autoLookAtTarget = true;
+    private double lookSpeed = 13.0;
+    private boolean preferStraightDirections = false; // НОВОЕ ПОЛЕ
 
     // Настройки безопасности
     private boolean safeFallEnabled = true;
@@ -382,4 +383,58 @@ public class ModConfig {
     public void setKeyOpenConfig(String keyOpenConfig) {
         this.keyOpenConfig = keyOpenConfig;
     }
+
+
+    public void copyFrom(ModConfig other) {
+        if (other == null) return;
+
+        setParkourEnabled(other.isParkourEnabled());
+        setAutoSprintEnabled(other.isAutoSprintEnabled());
+        setAutoJumpEnabled(other.isAutoJumpEnabled());
+        setDebugMode(other.isDebugMode());
+
+        setMaxScanRange(other.getMaxScanRange());
+        setMinJumpDistance(other.getMinJumpDistance());
+        setMaxJumpDistance(other.getMaxJumpDistance());
+        setBlockPlacementDelay(other.getBlockPlacementDelay());
+        setBlockPlacementHeight(other.getBlockPlacementHeight());
+
+        setAllowDiagonalMovement(other.isAllowDiagonalMovement());
+        setPreventOvershoot(other.isPreventOvershoot());
+        setAutoLookAtTarget(other.isAutoLookAtTarget());
+        setLookSpeed(other.getLookSpeed());
+        setPreferStraightDirections(other.isPreferStraightDirections());
+
+        setSafeFallEnabled(other.isSafeFallEnabled());
+        setFallDamageThreshold(other.getFallDamageThreshold());
+        setAvoidLava(other.isAvoidLava());
+        setAvoidVoid(other.isAvoidVoid());
+
+        setUseBlockWhitelist(other.isUseBlockWhitelist());
+        if (other.getAllowedBlocks() != null) {
+            setAllowedBlocks(new ArrayList<>(other.getAllowedBlocks()));
+        }
+        setUseIgnoreList(other.isUseIgnoreList());
+        if (other.getIgnoredBlocks() != null) {
+            setIgnoredBlocks(new ArrayList<>(other.getIgnoredBlocks()));
+        }
+
+        setHudVisible(other.isHudVisible());
+        setHudX(other.getHudX());
+        setHudY(other.getHudY());
+        setHudOpacity(other.getHudOpacity());
+        if (other.getHudColor() != null) {
+            setHudColor(other.getHudColor());
+        }
+        setHudScale(other.getHudScale());
+        setHudShowCoordinates(other.isHudShowCoordinates());
+        setHudShowTargetBlock(other.isHudShowTargetBlock());
+
+        if (other.getKeyToggleParkour() != null) setKeyToggleParkour(other.getKeyToggleParkour());
+        if (other.getKeyToggleSprint() != null) setKeyToggleSprint(other.getKeyToggleSprint());
+        if (other.getKeyToggleHUD() != null) setKeyToggleHUD(other.getKeyToggleHUD());
+        if (other.getKeyToggleJump() != null) setKeyToggleJump(other.getKeyToggleJump());
+        if (other.getKeyOpenConfig() != null) setKeyOpenConfig(other.getKeyOpenConfig());
+    }
+
 }

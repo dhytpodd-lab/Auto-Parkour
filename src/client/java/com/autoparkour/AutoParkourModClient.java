@@ -1,5 +1,6 @@
 package com.autoparkour;
 
+import com.autoparkour.commands.ClientCommands;
 import com.autoparkour.hud.HUDRenderer;
 import com.autoparkour.hud.ParkourHUD;
 import com.autoparkour.keybinds.KeyBindings;
@@ -46,6 +47,9 @@ public class AutoParkourModClient implements ClientModInitializer {
 
             // Инициализация обработчика клавиш
             keyInputHandler = new KeyInputHandler(parkourManager, parkourHUD);
+
+            // Регистрация клиентских команд
+            ClientCommands.register();
 
             // Регистрация обработчика тиков клиента
             ClientTickEvents.END_CLIENT_TICK.register(clientTick -> {

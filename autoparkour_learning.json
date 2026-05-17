@@ -1,13 +1,13 @@
 {
-  "jumpBoost": 0.125,
-  "sprintReliability": 0.6,
-  "optimalJumpWindow": 7,
-  "diagonalPenalty": 3.0,
-  "airControl": 0.8,
-  "successfulJumps": 1,
+  "jumpBoost": 0.24,
+  "sprintReliability": 1.0,
+  "optimalJumpWindow": 8,
+  "diagonalPenalty": 0.18,
+  "airControl": 0.92,
+  "successfulJumps": 0,
   "failedJumps": 0,
-  "averageJumpDistance": 2.69,
-  "totalJumps": 1,
+  "averageJumpDistance": 3.0,
+  "totalJumps": 0,
   "totalOvershoots": 0,
   "totalUndershoots": 0
 }

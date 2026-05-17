@@ -1,77 +1,78 @@
 package com.autoparkour.parkour;
 
-import com.autoparkour.AutoParkourMod;
 import com.autoparkour.config.ModConfig;
 import com.autoparkour.learning.AutoparkourLearning;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.World;
 
 public class ParkourExecutor {
 
-    // === ОБУЧЕНИЕ ===
     private final AutoparkourLearning learning = AutoparkourLearning.getInstance();
 
-    // === Основные cooldown'ы ===
     private int jumpCooldown = 0;
     private int ticksOnGround = 0;
     private int stuckTicks = 0;
     private Vec3d lastPos = Vec3d.ZERO;
 
-    // === Детекция края ===
     private int edgeTicks = 0;
-
-    // === Спринт ===
     private int sprintCooldown = 0;
 
-    // === Прицеливание ===
     private float cameraResponsiveness = 1.2f;
     private float lastYawError = 0f;
     private int cameraLockTicks = 0;
 
-    // === Прыжки (теперь с обучением) ===
-    private float jumpBoost;      // будет загружено из learning
-    private float airControl;     // будет загружено из learning
+    private float jumpBoost;
+    private float airControl;
 
-    // === Блокировка цели ===
     private BlockPos lockedTarget = null;
     private int targetLockTicks = 0;
     private int noJumpTicks = 0;
     private int airTicks = 0;
 
-    // === ФЛАГ ТЕЛЕПОРТА ===
     private boolean teleportDetected = false;
     private Vec3d preTeleportPos = Vec3d.ZERO;
     private int teleportGraceTicks = 0;
 
-    // === Для отслеживания результатов прыжков ===
     private double lastJumpDistance = 0;
-    private boolean lastJumpOvershoot = false;
     private Vec3d jumpStartPos = Vec3d.ZERO;
     private boolean wasInAir = false;
 
+    // Direction of the most recent takeoff. Used in the air phase instead of
+    // continuously re-aiming velocity at the (moving) target — that re-aiming
+    // produced wavy semicircle trajectories when the player landed close to the
+    // target side.
+    private double lockedAirDirX = 0.0;
+    private double lockedAirDirZ = 0.0;
+
     public ParkourExecutor() {
-        // Загружаем параметры из обучения
         this.jumpBoost = learning.getJumpBoost();
         this.airControl = learning.getAirControl();
     }
 
     public void executeMovement(ClientPlayerEntity player, BlockPos targetBlock, ModConfig config) {
-        if (player == null || targetBlock == null) return;
+        if (player == null || targetBlock == null || config == null) return;
 
-        // === ТЕЛЕПОРТ-ДЕТЕКЦИЯ ===
+        if (!isLandingStillAvailable(player, targetBlock)) {
+            releaseVanishedTarget(player, targetBlock);
+            return;
+        }
+
         Vec3d currentPos = player.getPos();
-        if (preTeleportPos != Vec3d.ZERO && preTeleportPos.distanceTo(currentPos) > 5.0 && player.isOnGround()) {
+        if (!preTeleportPos.equals(Vec3d.ZERO) && preTeleportPos.distanceTo(currentPos) > 5.0 && player.isOnGround()) {
             teleportDetected = true;
             teleportGraceTicks = 15;
             lockedTarget = null;
-            learning.onTeleport(); // Уведомляем обучение о телепорте
+            learning.onTeleport();
         }
         preTeleportPos = currentPos;
         if (teleportGraceTicks > 0) teleportGraceTicks--;
 
-        // === Принудительная смена цели в воздухе ===
         boolean forceRetarget = (!player.isOnGround() && noJumpTicks > 4) || teleportDetected;
         if (lockedTarget == null || !lockedTarget.equals(targetBlock) || forceRetarget) {
             lockedTarget = targetBlock;
@@ -79,6 +80,11 @@ public class ParkourExecutor {
             cameraLockTicks = 0;
         } else {
             targetLockTicks++;
+        }
+
+        if (lockedTarget != null && !isLandingStillAvailable(player, lockedTarget)) {
+            releaseVanishedTarget(player, lockedTarget);
+            return;
         }
 
         if (targetLockTicks > (player.isOnGround() ? 35 : 12) && !teleportDetected) {
@@ -98,35 +104,32 @@ public class ParkourExecutor {
         double horizDist = Math.hypot(dx, dz);
         double heightDiff = targetPos.y - currentPos.y;
 
-        // === ОТСЛЕЖИВАНИЕ РЕЗУЛЬТАТОВ ПРЫЖКА ===
         if (!player.isOnGround() && !wasInAir) {
-            // Только что взлетели
             jumpStartPos = currentPos;
             lastJumpDistance = horizDist;
         }
 
         if (player.isOnGround() && wasInAir) {
-            // Только что приземлились
-            double landingDist = Math.sqrt(player.getBlockPos().getSquaredDistance(lockedTarget));
-            boolean overshoot = landingDist > 2.0 && lastJumpDistance < 3.0;
+            double landingDist = horizontalDistanceToBlockCenter(player.getPos(), lockedTarget);
+            boolean overshoot = landingDist > 1.8 && lastJumpDistance < 3.0;
 
-            if (landingDist < 1.5) {
+            if (landingDist < 1.15) {
                 learning.onSuccessfulJump(lastJumpDistance);
             } else {
                 learning.onFailedJump(overshoot);
             }
 
-            // Обновляем параметры из обучения
             jumpBoost = learning.getJumpBoost();
             airControl = learning.getAirControl();
         }
         wasInAir = !player.isOnGround();
 
-        // === Тики на земле / в воздухе ===
         if (player.isOnGround()) {
             ticksOnGround++;
             noJumpTicks = 0;
             airTicks = 0;
+            lockedAirDirX = 0.0;
+            lockedAirDirZ = 0.0;
         } else {
             ticksOnGround = 0;
             noJumpTicks++;
@@ -135,10 +138,9 @@ public class ParkourExecutor {
 
         if (sprintCooldown > 0) sprintCooldown--;
 
-        // === Анти-застревание ===
         if (lastPos.squaredDistanceTo(currentPos) < 0.001 && noJumpTicks > 3) {
             stuckTicks++;
-            if (stuckTicks > 5) {
+            if (stuckTicks > 5 && isLandingStillAvailable(player, lockedTarget)) {
                 player.jump();
                 stuckTicks = 0;
             }
@@ -147,50 +149,50 @@ public class ParkourExecutor {
         }
         lastPos = currentPos;
 
-        // === Детекция края ===
-        boolean isOnEdge = detectEdge(player);
+        boolean diagonalTarget = isDiagonalTarget(player, lockedTarget, targetPos);
+        boolean isOnEdge = detectEdge(player) || isNearFrontEdge(player, lockedTarget) || isNearDiagonalTakeoffEdge(player, lockedTarget, diagonalTarget);
 
-        // === КАМЕРА ===
         updateCameraThatActuallyWorks(player, targetPos, config, horizDist, isOnEdge);
 
-        // === Вектора направления ===
         Vec3d lookVec = player.getRotationVec(1.0F);
-        Vec3d lookFlat = new Vec3d(lookVec.x, 0, lookVec.z).normalize();
-        Vec3d toTargetFlat = new Vec3d(dx, 0, dz).normalize();
-        double dot = (toTargetFlat.length() > 0.1) ? lookFlat.dotProduct(toTargetFlat) : 1.0;
+        Vec3d lookFlat = normalizeFlat(lookVec);
+        Vec3d toTargetFlat = normalizeFlat(new Vec3d(dx, 0, dz));
+        double dot = (toTargetFlat.length() > 0.1 && lookFlat.length() > 0.1) ? lookFlat.dotProduct(toTargetFlat) : 1.0;
 
-        // === Спринт с учётом обучения ===
         if (config.isAutoSprintEnabled() && sprintCooldown <= 0) {
-            boolean shouldSprint = (horizDist > 1.8 && dot > 0.5) || (isOnEdge && horizDist > 1.5);
-            if (horizDist < 1.4) shouldSprint = false;
+            // Only sprint when we actually need a sprint-jump (>= ~2 block distance).
+            // For 1-block targets, sprint+jump overshoots significantly because the
+            // vanilla sprint-jump bonus (+0.2 in look direction) is too much for a
+            // short hop.
+            boolean shouldSprint = (horizDist > 1.75 && dot > 0.35) || (isOnEdge && horizDist > 1.55);
+            if (horizDist >= 2.5 && dot > 0.25) shouldSprint = true;
+            if (horizDist < 1.55) shouldSprint = false;
 
-            // Учитываем надёжность спринта из обучения
-            if (learning.getSprintReliability() < 0.7f && shouldSprint) {
+            if (learning.getSprintReliability() < 0.7f && shouldSprint && horizDist < 2.8) {
                 shouldSprint = false;
             }
 
             player.setSprinting(shouldSprint);
         }
 
-        // === Прыжки ===
-        boolean shouldJump = updateJumpPolicy(player, config, horizDist, heightDiff, isOnEdge, dot);
+        boolean shouldJump = updateJumpPolicy(player, config, horizDist, heightDiff, isOnEdge, dot, diagonalTarget);
 
-        if (shouldJump && player.isOnGround() && jumpCooldown <= 0) {
-            executeJump(player, lookFlat, horizDist, heightDiff, config);
+        if (shouldJump && player.isOnGround() && jumpCooldown <= 0 && isLandingStillAvailable(player, lockedTarget)) {
+            executeJump(player, toTargetFlat, horizDist, heightDiff, config, diagonalTarget, isOnEdge);
         }
 
-        // === Движение к цели ===
-        if (dot > 0.15 || horizDist < 1.6) {
-            moveTowards(player, targetPos, config, horizDist, isOnEdge);
+        boolean aimNearlyReady = Math.abs(lastYawError) < (diagonalTarget ? 62.0f : 50.0f);
+        boolean mayMoveWhileTurning = !player.isOnGround() || isOnEdge || horizDist < 1.25 || aimNearlyReady;
+        boolean enoughAimForInput = dot > (diagonalTarget ? 0.22 : 0.30);
+        if (mayMoveWhileTurning && (enoughAimForInput || horizDist < 1.25 || !player.isOnGround() || isOnEdge)) {
+            moveTowards(player, targetPos, config, horizDist, isOnEdge, diagonalTarget);
         }
 
-        // === Торможение после успеха ===
-        if (horizDist < 0.4 && player.isOnGround() && !shouldJump && !isOnEdge) {
+        if (horizDist < 0.35 && player.isOnGround() && !shouldJump && !isOnEdge) {
             Vec3d v = player.getVelocity();
-            player.setVelocity(v.multiply(0.2, 1.0, 0.2));
+            player.setVelocity(v.multiply(0.15, 1.0, 0.15));
         }
 
-        // === Cooldown обновление ===
         if (jumpCooldown > 0) jumpCooldown--;
     }
 
@@ -206,37 +208,30 @@ public class ParkourExecutor {
         float targetYaw = MathHelper.wrapDegrees((float) Math.toDegrees(Math.atan2(dz, dx)) - 90f);
         float currentYaw = player.getYaw();
 
-        float yawError = targetYaw - currentYaw;
-        while (yawError > 180f) yawError -= 360f;
-        while (yawError < -180f) yawError += 360f;
-
+        float yawError = MathHelper.wrapDegrees(targetYaw - currentYaw);
         lastYawError = yawError;
 
-        if (Math.abs(yawError) > 60f) {
-            player.setYaw(targetYaw);
-            cameraLockTicks = 0;
-            return;
-        }
-
-        float baseSpeed = 25f + 45f * (float) config.getLookSpeed();
+        // Full aim, anti-cheat safe movement: yaw rotation itself is fine, but jumping
+        // before the yaw has converged makes the player clip the edge or get corrected.
+        float baseSpeed = 5.0f + 2.7f * (float) config.getLookSpeed();
         float boost = 1.0f;
 
-        if (!player.isOnGround() && horizDist > 2.0) boost = 1.8f;
-        if (onEdge) boost = 1.5f;
-        if (Math.abs(yawError) > 30f) boost *= 1.5f;
+        if (player.isOnGround()) boost = Math.max(boost, 1.35f);
+        if (!player.isOnGround() && horizDist > 2.0) boost = Math.max(boost, 1.10f);
+        if (onEdge) boost = Math.max(boost, 1.55f);
+        if (horizDist >= 3.0) boost = Math.max(boost, 1.28f);
+        if (Math.abs(yawError) > 35f) boost *= 1.25f;
+        if (Math.abs(yawError) > 70f) boost *= 1.15f;
 
-        float step = MathHelper.clamp(yawError,
-                -baseSpeed * boost * cameraResponsiveness,
-                baseSpeed * boost * cameraResponsiveness);
+        float maxClamp = player.isOnGround() ? 56.0f : 40.0f;
+        if (onEdge) maxClamp = player.isOnGround() ? 68.0f : 46.0f;
+        float maxStep = MathHelper.clamp(baseSpeed * boost * cameraResponsiveness, 8.0f, maxClamp);
+        float step = MathHelper.clamp(yawError, -maxStep, maxStep);
 
         player.setYaw(currentYaw + step);
 
-        float remaining = targetYaw - player.getYaw();
-        while (remaining > 180f) remaining -= 360f;
-        while (remaining < -180f) remaining += 360f;
-
-        if (Math.abs(remaining) > 20f && cameraLockTicks < 3) {
-            player.setYaw(player.getYaw() + MathHelper.clamp(remaining, -35f, 35f));
+        float remaining = MathHelper.wrapDegrees(targetYaw - player.getYaw());
+        if (Math.abs(remaining) > 28f) {
             cameraLockTicks++;
         } else {
             cameraLockTicks = 0;
@@ -252,8 +247,8 @@ public class ParkourExecutor {
         BlockPos below = player.getBlockPos().down();
         if (player.getWorld().getBlockState(below).isAir()) return false;
 
-        Vec3d look = player.getRotationVec(1.0F);
-        look = new Vec3d(look.x, 0, look.z).normalize();
+        Vec3d look = normalizeFlat(player.getRotationVec(1.0F));
+        if (look.length() < 0.1) return false;
 
         BlockPos front = below.add(
                 MathHelper.clamp((int) Math.round(look.x), -1, 1),
@@ -272,46 +267,166 @@ public class ParkourExecutor {
         return edgeNow && edgeTicks > 0;
     }
 
+    private boolean isNearFrontEdge(ClientPlayerEntity player, BlockPos targetBlock) {
+        if (!player.isOnGround() || targetBlock == null) return false;
+
+        BlockPos supportBlock = getSupportBlock(player);
+        Vec3d playerPos = player.getPos();
+        double centerX = supportBlock.getX() + 0.5;
+        double centerZ = supportBlock.getZ() + 0.5;
+        double targetX = targetBlock.getX() + 0.5;
+        double targetZ = targetBlock.getZ() + 0.5;
+        Vec3d dir = normalizeFlat(new Vec3d(targetX - centerX, 0.0, targetZ - centerZ));
+        if (dir.length() < 0.1) return false;
+
+        double forwardOffset = (playerPos.x - centerX) * dir.x + (playerPos.z - centerZ) * dir.z;
+        return forwardOffset > 0.30;
+    }
+
+    private boolean isNearDiagonalTakeoffEdge(ClientPlayerEntity player, BlockPos targetBlock, boolean diagonalTarget) {
+        if (!diagonalTarget || !player.isOnGround() || targetBlock == null) return false;
+
+        BlockPos supportBlock = getSupportBlock(player);
+        Vec3d pos = player.getPos();
+
+        double supportCenterX = supportBlock.getX() + 0.5;
+        double supportCenterZ = supportBlock.getZ() + 0.5;
+        double targetCenterX = targetBlock.getX() + 0.5;
+        double targetCenterZ = targetBlock.getZ() + 0.5;
+
+        double dirX = Math.signum(targetCenterX - supportCenterX);
+        double dirZ = Math.signum(targetCenterZ - supportCenterZ);
+        if (dirX == 0.0 || dirZ == 0.0) return false;
+
+        double xOffset = (pos.x - supportCenterX) * dirX;
+        double zOffset = (pos.z - supportCenterZ) * dirZ;
+
+        return (xOffset > 0.20 && zOffset > 0.20) || (xOffset + zOffset > 0.50);
+    }
+
     private boolean updateJumpPolicy(ClientPlayerEntity player, ModConfig config,
-                                     double dist, double height, boolean onEdge, double dot) {
-        if (!config.isAutoJumpEnabled() || jumpCooldown > 0 || !player.isOnGround() || ticksOnGround < 1) {
+                                     double dist, double height, boolean onEdge, double dot, boolean diagonalTarget) {
+        // Require a minimum amount of ramp-up time on the ground so the player has
+        // time to (a) rotate yaw onto the target and (b) build up horizontal
+        // velocity via moveTowards. Otherwise the jump fires with near-zero forward
+        // speed and undershoots.
+        int minGroundTicks = dist >= 2.80 ? 4 : 3;
+        if (!config.isAutoJumpEnabled() || jumpCooldown > 0 || !player.isOnGround() || ticksOnGround < minGroundTicks) {
             return false;
         }
 
-        // Используем optimalJumpWindow из обучения
         int window = learning.getOptimalJumpWindow();
 
-        if (onEdge && dist > 0.8) return true;
-        if (dist > 1.5 && dot > 0.4 && ticksOnGround > window - 5) return true;
-        if (height > 0.5 && dist < 2.0 && dot > 0.3) return true;
+        float absYawError = Math.abs(lastYawError);
+
+        if (diagonalTarget) {
+            if (absYawError > 58f) return false;
+            if (dot < 0.45) return false;
+            if (onEdge && dist > 0.95 && dist <= 4.70 && dot > 0.50) return true;
+            if (dist >= 1.10 && dist < 2.10 && dot > 0.48 && absYawError < 55f) return true;
+            if (dist >= 2.10 && dist <= 3.35 && ticksOnGround >= Math.max(1, window - 5) && dot > 0.55) return true;
+            if (dist >= 3.35 && dist <= 4.70 && ticksOnGround >= Math.max(1, window - 3) && dot > 0.60) return true;
+            return height > 0.5 && dist > 0.6 && dot > 0.45;
+        }
+
+        if (dist >= 3.0 && dist <= 4.45) {
+            if (absYawError > 45f || dot < 0.62) return false;
+            if (onEdge) return true;
+            return ticksOnGround >= Math.max(1, window - 3) && dist <= 4.20;
+        }
+
+        if (onEdge && dist > 0.8 && dot > 0.50 && absYawError < 55f) return true;
+        if (dist > 1.20 && dot > 0.52 && absYawError < 55f && ticksOnGround >= Math.max(1, window - 6)) return true;
+        if (height > 0.5 && dist < 2.1 && dot > 0.45 && absYawError < 60f) return true;
 
         return false;
     }
 
-    private void executeJump(ClientPlayerEntity player, Vec3d lookFlat,
-                             double dist, double height, ModConfig config) {
+    private void executeJump(ClientPlayerEntity player, Vec3d directionFlat,
+                             double dist, double height, ModConfig config, boolean diagonalTarget, boolean onEdge) {
+        if (directionFlat.length() < 0.1) return;
+
+        // Sprint+jump adds +0.2 to horizontal velocity in look direction. That is
+        // exactly what we need for 2/3/4 block jumps. For 1-block jumps it is too
+        // much (overshoots), so don't sprint there — a plain walk-jump reaches a
+        // 1-block target cleanly.
+        if (config.isAutoSprintEnabled() && dist > 1.70) {
+            player.setSprinting(true);
+        }
+
+        // Lock takeoff direction so the air phase keeps a straight trajectory.
+        lockedAirDirX = directionFlat.x;
+        lockedAirDirZ = directionFlat.z;
+
+        Vec3d preVel = player.getVelocity();
+        double preForward = preVel.x * directionFlat.x + preVel.z * directionFlat.z;
+
+        // Target pre-jump forward speed. Vanilla player.jump() with sprint adds +0.2
+        // in look direction, so post-takeoff forward speed = preForward + 0.2.
+        // Keeping preForward within the vanilla sprint range (<= 0.28) avoids
+        // "moved too quickly" / setback from server-side movement validation.
+        float targetPreJump;
+        if (dist >= 3.80) {
+            targetPreJump = 0.275f; // ~4 block: needs full sprint speed
+        } else if (dist >= 2.80) {
+            targetPreJump = 0.235f; // ~3 block
+        } else if (dist >= 1.85) {
+            targetPreJump = 0.175f; // ~2 block
+        } else {
+            targetPreJump = 0.115f; // ~1 block (walk-jump suffices)
+        }
+
+        if (diagonalTarget) targetPreJump += 0.018f;
+        if (height > 0.55) targetPreJump += 0.018f;
+        if (onEdge) targetPreJump += 0.012f;
+        if (config.isPreventOvershoot() && dist < 1.5) {
+            targetPreJump = Math.min(targetPreJump, 0.120f);
+        }
+
+        targetPreJump = MathHelper.clamp(targetPreJump, 0.08f, 0.282f);
+
+        // Apply at most ~0.045 m/tick of artificial boost so the per-tick position
+        // delta stays within what a vanilla sprint would produce.
+        if (preForward < targetPreJump) {
+            double boost = Math.min(targetPreJump - preForward, 0.045);
+            player.setVelocity(
+                    preVel.x + directionFlat.x * boost,
+                    preVel.y,
+                    preVel.z + directionFlat.z * boost
+            );
+        }
+
+        // Vanilla physics: y += 0.42; if sprinting, velocity += 0.2 * look.
         player.jump();
-        jumpCooldown = 7;
+
+        // Vanilla sprint-jump adds +0.2 in the *look* direction. If the yaw has
+        // not fully converged to the target direction at takeoff, that bonus
+        // injects a perpendicular component which makes the trajectory curve in
+        // a small arc through the air. Project the post-takeoff horizontal
+        // velocity onto the locked takeoff direction to kill the lateral part,
+        // keeping a straight-line trajectory. We keep the forward component
+        // intact (and slightly bump it if it dropped below the pre-jump target).
+        Vec3d postVel = player.getVelocity();
+        double postForward = postVel.x * directionFlat.x + postVel.z * directionFlat.z;
+        double forwardKeep = Math.max(postForward, preForward + 0.18);
+        // Don't ever exceed what a fully aligned vanilla sprint-jump would
+        // produce — that is preForward + 0.20. Anti-cheat will flag anything
+        // above that.
+        forwardKeep = Math.min(forwardKeep, preForward + 0.205);
+        player.setVelocity(
+                directionFlat.x * forwardKeep,
+                postVel.y,
+                directionFlat.z * forwardKeep
+        );
+
+        jumpCooldown = dist >= 3.0 ? 7 : 6;
         ticksOnGround = 0;
         edgeTicks = 0;
-        sprintCooldown = 6;
-
-        Vec3d vel = player.getVelocity();
-
-        // Сила прыжка из обучения
-        float boost = jumpBoost;
-        if (dist > 2.2) boost += 0.08f;
-        if (height > 0.6) boost += 0.05f;
-
-        player.setVelocity(
-                vel.x + lookFlat.x * boost,
-                vel.y,
-                vel.z + lookFlat.z * boost
-        );
+        sprintCooldown = dist >= 3.0 ? 5 : 4;
     }
 
     private void moveTowards(ClientPlayerEntity player, Vec3d target, ModConfig config,
-                             double dist, boolean onEdge) {
+                             double dist, boolean onEdge, boolean diagonalTarget) {
         Vec3d pos = player.getPos();
         double dx = target.x - pos.x;
         double dz = target.z - pos.z;
@@ -331,21 +446,111 @@ public class ParkourExecutor {
             }
         }
 
-        double speed = 0.24;
-        if (onEdge) speed = 0.28;
-        if (player.isSprinting()) speed += 0.05;
-        if (dist > 2.0) speed += 0.03;
-        if (dist < 1.0) speed = 0.17;
+        if (!player.isOnGround()) {
+            Vec3d v = player.getVelocity();
 
-        if (!player.isOnGround()) speed *= airControl;
+            // Use the takeoff direction instead of re-aiming each tick at the
+            // moving target. Re-aiming caused the velocity vector to swing in an
+            // arc around the target whenever the player got close to it, which
+            // looked like a wavy semicircle and undershot the landing.
+            boolean haveLock = lockedAirDirX != 0.0 || lockedAirDirZ != 0.0;
+            double useDx = haveLock ? lockedAirDirX : dx;
+            double useDz = haveLock ? lockedAirDirZ : dz;
 
-        player.setVelocity(dx * speed, player.getVelocity().y, dz * speed);
+            double forwardSpeed = v.x * useDx + v.z * useDz;
+            double sideX = v.x - useDx * forwardSpeed;
+            double sideZ = v.z - useDz * forwardSpeed;
+
+            // Vanilla W-press in air adds about 0.02 m/tick toward look direction.
+            double airAccel = 0.020 * MathHelper.clamp(airControl, 0.70f, 1.10f);
+
+            // Damp lateral drift so we still land on the target line. A bit
+            // stronger than before because we now also do a hard project at
+            // takeoff — this just kills any drift introduced by air control
+            // between ticks.
+            double lateralKill = diagonalTarget ? 0.16 : 0.22;
+
+            player.setVelocity(
+                    v.x + useDx * airAccel - sideX * lateralKill,
+                    v.y,
+                    v.z + useDz * airAccel - sideZ * lateralKill
+            );
+            return;
+        }
+
+        // If we just landed on this block and we are sitting off-center along the
+        // axis perpendicular to the next jump direction, nudge ourselves back
+        // onto the line first. Otherwise the next jump fires from the side of
+        // the block and either undershoots laterally or has to fight a lateral
+        // velocity component all the way through the air.
+        if (ticksOnGround > 0 && ticksOnGround <= 3) {
+            BlockPos support = getSupportBlock(player);
+            double centerX = support.getX() + 0.5;
+            double centerZ = support.getZ() + 0.5;
+            double offsetX = pos.x - centerX;
+            double offsetZ = pos.z - centerZ;
+            // Lateral component = offset perpendicular to (dx, dz).
+            double lateralOffset = offsetX * (-dz) + offsetZ * dx;
+            if (Math.abs(lateralOffset) > 0.22) {
+                // Pull perpendicular to target direction, toward the target line.
+                double pullX = -lateralOffset * (-dz);
+                double pullZ = -lateralOffset * dx;
+                double pullMag = Math.hypot(pullX, pullZ);
+                if (pullMag > 0.0001) {
+                    pullX /= pullMag;
+                    pullZ /= pullMag;
+                    // Blend the lateral pull into the forward direction so the
+                    // player still advances toward the target while correcting.
+                    double blendForward = 0.55;
+                    double blendSide = 0.55;
+                    double moveX = dx * blendForward + pullX * blendSide;
+                    double moveZ = dz * blendForward + pullZ * blendSide;
+                    double moveMag = Math.hypot(moveX, moveZ);
+                    if (moveMag > 0.0001) {
+                        moveX /= moveMag;
+                        moveZ /= moveMag;
+                    }
+                    Vec3d vCorrect = player.getVelocity();
+                    double correctSpeed = 0.135;
+                    double newCx = vCorrect.x + MathHelper.clamp(moveX * correctSpeed - vCorrect.x, -0.10, 0.10);
+                    double newCz = vCorrect.z + MathHelper.clamp(moveZ * correctSpeed - vCorrect.z, -0.10, 0.10);
+                    player.setVelocity(newCx, vCorrect.y, newCz);
+                    return;
+                }
+            }
+        }
+
+        // Ground: ramp toward vanilla sprint speed (~0.28) so player.jump() can
+        // produce a full sprint-jump trajectory without us having to spike velocity
+        // at takeoff. We must use a per-tick velocity delta comparable to vanilla
+        // sprint acceleration (~0.13 m/tick) — the previous 0.028 m/tick was
+        // dominated by ground friction (~0.546 retention/tick) and the player
+        // never actually reached sprint speed.
+        double speed = 0.145;
+        if (onEdge) speed = 0.175;
+        if (player.isSprinting()) speed += 0.085;
+        if (dist > 2.5) speed += 0.020;
+        if (dist > 3.4) speed += 0.012;
+        if (diagonalTarget && dist > 1.25) speed += 0.014;
+        if (dist < 1.0) speed = diagonalTarget ? 0.135 : 0.120;
+        speed = MathHelper.clamp(speed, 0.10, 0.282);
+
+        Vec3d v = player.getVelocity();
+        double desiredX = dx * speed;
+        double desiredZ = dz * speed;
+        // Vanilla sprint accel is roughly 0.13 m/tick, so this stays inside what
+        // server-side movement validators expect.
+        double maxDelta = diagonalTarget ? 0.135 : 0.130;
+        double newX = v.x + MathHelper.clamp(desiredX - v.x, -maxDelta, maxDelta);
+        double newZ = v.z + MathHelper.clamp(desiredZ - v.z, -maxDelta, maxDelta);
+        player.setVelocity(newX, v.y, newZ);
     }
 
     public void tryReachNearestBlock(ClientPlayerEntity player, BlockPos block, ModConfig config) {
         if (player == null || block == null) return;
         Vec3d pos = new Vec3d(block.getX() + 0.5, block.getY() + 1.0, block.getZ() + 0.5);
-        moveTowards(player, pos, config, player.getPos().distanceTo(pos), false);
+        boolean diagonalTarget = isDiagonalTarget(player, block, pos);
+        moveTowards(player, pos, config, player.getPos().distanceTo(pos), false, diagonalTarget);
     }
 
     public void resetCooldowns() {
@@ -361,12 +566,93 @@ public class ParkourExecutor {
         teleportDetected = false;
         teleportGraceTicks = 0;
         cameraLockTicks = 0;
+        lockedAirDirX = 0.0;
+        lockedAirDirZ = 0.0;
+    }
+
+
+
+    public void reloadLearning() {
+        learning.load();
+        jumpBoost = learning.getJumpBoost();
+        airControl = learning.getAirControl();
+        resetCooldowns();
     }
 
     public void onTeleport() {
         teleportDetected = true;
         teleportGraceTicks = 15;
         lockedTarget = null;
+        lockedAirDirX = 0.0;
+        lockedAirDirZ = 0.0;
         learning.onTeleport();
+    }
+
+    private boolean isLandingStillAvailable(ClientPlayerEntity player, BlockPos blockPos) {
+        if (player == null || blockPos == null || player.getWorld() == null) return false;
+        World world = player.getWorld();
+
+        if (blockPos.getY() < world.getBottomY() || blockPos.getY() > world.getTopYInclusive()) return false;
+        if (blockPos.equals(player.getBlockPos().down())) return false;
+
+        BlockState state = world.getBlockState(blockPos);
+        Block block = state.getBlock();
+        if (state.isAir() || block == Blocks.CAVE_AIR || block == Blocks.VOID_AIR) return false;
+        if (block == Blocks.WATER || block == Blocks.LAVA || block == Blocks.FIRE || block == Blocks.SOUL_FIRE) return false;
+        if (block == Blocks.CACTUS || block == Blocks.MAGMA_BLOCK || block == Blocks.POWDER_SNOW || block == Blocks.COBWEB) return false;
+
+        return isHeadSpaceFree(world, blockPos.up()) && isHeadSpaceFree(world, blockPos.up(2));
+    }
+
+    private boolean isHeadSpaceFree(World world, BlockPos pos) {
+        if (pos.getY() < world.getBottomY() || pos.getY() > world.getTopYInclusive()) return false;
+        BlockState state = world.getBlockState(pos);
+        Block block = state.getBlock();
+        return state.isAir() || block == Blocks.CAVE_AIR || block == Blocks.VOID_AIR || block == Blocks.TALL_GRASS || block == Blocks.FERN || block == Blocks.VINE;
+    }
+
+    private void releaseVanishedTarget(ClientPlayerEntity player, BlockPos targetBlock) {
+        if (lockedTarget != null && lockedTarget.equals(targetBlock)) {
+            lockedTarget = null;
+        }
+        targetLockTicks = 0;
+        cameraLockTicks = 0;
+
+        Vec3d velocity = player.getVelocity();
+        double horizontalBrake = player.isOnGround() ? 0.20 : 0.72;
+        player.setVelocity(velocity.x * horizontalBrake, velocity.y, velocity.z * horizontalBrake);
+    }
+
+    private boolean isDiagonalTarget(ClientPlayerEntity player, BlockPos targetBlock, Vec3d targetPos) {
+        if (player == null || targetBlock == null || targetPos == null) return false;
+
+        BlockPos supportBlock = getSupportBlock(player);
+        if (supportBlock.getX() != targetBlock.getX() && supportBlock.getZ() != targetBlock.getZ()) {
+            return true;
+        }
+
+        Vec3d pos = player.getPos();
+        return Math.abs(targetPos.x - pos.x) > 0.75 && Math.abs(targetPos.z - pos.z) > 0.75;
+    }
+
+    private BlockPos getSupportBlock(ClientPlayerEntity player) {
+        BlockPos feet = player.getBlockPos();
+        BlockPos below = feet.down();
+        if (!player.getWorld().getBlockState(below).isAir()) {
+            return below;
+        }
+        return feet;
+    }
+
+    private Vec3d normalizeFlat(Vec3d vector) {
+        Vec3d flat = new Vec3d(vector.x, 0.0, vector.z);
+        if (flat.length() < 0.0001) return Vec3d.ZERO;
+        return flat.normalize();
+    }
+
+    private double horizontalDistanceToBlockCenter(Vec3d pos, BlockPos blockPos) {
+        double dx = blockPos.getX() + 0.5 - pos.x;
+        double dz = blockPos.getZ() + 0.5 - pos.z;
+        return Math.hypot(dx, dz);
     }
 }

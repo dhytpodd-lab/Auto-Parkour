@@ -13,11 +13,11 @@ public class AutoparkourLearning {
     private final Gson gson;
 
     // Параметры обучения
-    private float jumpBoost = 0.18f;
+    private float jumpBoost = 0.24f;
     private float sprintReliability = 1.0f;
-    private int optimalJumpWindow = 7;
-    private float diagonalPenalty = 3.0f;
-    private float airControl = 0.8f;
+    private int optimalJumpWindow = 8;
+    private float diagonalPenalty = 0.18f;
+    private float airControl = 0.92f;
     private int successfulJumps = 0;
     private int failedJumps = 0;
     private float averageJumpDistance = 1.5f;
@@ -134,9 +134,9 @@ private int getIntValue(String json, String key, int defaultValue) {
 
         // Улучшаем параметры при успехе
         if (distance > 2.5) {
-            jumpBoost = Math.min(0.28f, jumpBoost + 0.005f);
+            jumpBoost = Math.min(0.28f, jumpBoost + 0.003f);
         } else if (distance < 1.5) {
-            jumpBoost = Math.max(0.14f, jumpBoost - 0.002f);
+            jumpBoost = Math.max(0.16f, jumpBoost - 0.002f);
         }
 
         save();
@@ -148,11 +148,11 @@ private int getIntValue(String json, String key, int defaultValue) {
 
         if (overshoot) {
             totalOvershoots++;
-            jumpBoost = Math.max(0.12f, jumpBoost - 0.01f);
-            sprintReliability = Math.max(0.6f, sprintReliability - 0.05f);
+            jumpBoost = Math.max(0.14f, jumpBoost - 0.012f);
+            sprintReliability = Math.max(0.7f, sprintReliability - 0.04f);
         } else {
             totalUndershoots++;
-            jumpBoost = Math.min(0.25f, jumpBoost + 0.008f);
+            jumpBoost = Math.min(0.30f, jumpBoost + 0.004f);
         }
 
         save();
@@ -171,7 +171,7 @@ private int getIntValue(String json, String key, int defaultValue) {
     // Геттеры и сеттеры
     public float getJumpBoost() { return jumpBoost; }
     public void setJumpBoost(float jumpBoost) {
-        this.jumpBoost = Math.max(0.1f, Math.min(0.3f, jumpBoost));
+        this.jumpBoost = Math.max(0.12f, Math.min(0.32f, jumpBoost));
         save();
     }
 
@@ -189,13 +189,13 @@ private int getIntValue(String json, String key, int defaultValue) {
 
     public float getDiagonalPenalty() { return diagonalPenalty; }
     public void setDiagonalPenalty(float diagonalPenalty) {
-        this.diagonalPenalty = Math.max(1.5f, Math.min(10.0f, diagonalPenalty));
+        this.diagonalPenalty = Math.max(0.0f, Math.min(10.0f, diagonalPenalty));
         save();
     }
 
     public float getAirControl() { return airControl; }
     public void setAirControl(float airControl) {
-        this.airControl = Math.max(0.5f, Math.min(1.0f, airControl));
+        this.airControl = Math.max(0.70f, Math.min(0.96f, airControl));
         save();
     }
 
@@ -221,11 +221,11 @@ private int getIntValue(String json, String key, int defaultValue) {
     }
 
     public void resetAll() {
-        jumpBoost = 0.18f;
+        jumpBoost = 0.24f;
         sprintReliability = 1.0f;
-        optimalJumpWindow = 7;
-        diagonalPenalty = 3.0f;
-        airControl = 0.8f;
+        optimalJumpWindow = 8;
+        diagonalPenalty = 0.18f;
+        airControl = 0.92f;
         successfulJumps = 0;
         failedJumps = 0;
         averageJumpDistance = 1.5f;
