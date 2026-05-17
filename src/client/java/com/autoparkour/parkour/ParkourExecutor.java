@@ -43,6 +43,13 @@ public class ParkourExecutor {
     private Vec3d jumpStartPos = Vec3d.ZERO;
     private boolean wasInAir = false;
 
+    // Direction of the most recent takeoff. Used in the air phase instead of
+    // continuously re-aiming velocity at the (moving) target — that re-aiming
+    // produced wavy semicircle trajectories when the player landed close to the
+    // target side.
+    private double lockedAirDirX = 0.0;
+    private double lockedAirDirZ = 0.0;
+
     public ParkourExecutor() {
         this.jumpBoost = learning.getJumpBoost();
         this.airControl = learning.getAirControl();
@@ -121,6 +128,8 @@ public class ParkourExecutor {
             ticksOnGround++;
             noJumpTicks = 0;
             airTicks = 0;
+            lockedAirDirX = 0.0;
+            lockedAirDirZ = 0.0;
         } else {
             ticksOnGround = 0;
             noJumpTicks++;
@@ -328,60 +337,62 @@ public class ParkourExecutor {
                              double dist, double height, ModConfig config, boolean diagonalTarget, boolean onEdge) {
         if (directionFlat.length() < 0.1) return;
 
-        if (config.isAutoSprintEnabled() && dist > 1.6) {
+        // Sprint for any non-trivial jump so vanilla sprint-jump adds its +0.2 boost
+        // in the look direction — that is the only anti-cheat-safe way to actually
+        // gain horizontal speed at takeoff.
+        if (config.isAutoSprintEnabled() && dist > 0.9) {
             player.setSprinting(true);
         }
 
+        // Lock takeoff direction so the air phase keeps a straight trajectory.
+        lockedAirDirX = directionFlat.x;
+        lockedAirDirZ = directionFlat.z;
+
+        Vec3d preVel = player.getVelocity();
+        double preForward = preVel.x * directionFlat.x + preVel.z * directionFlat.z;
+
+        // Target pre-jump forward speed. Vanilla player.jump() with sprint adds +0.2
+        // in look direction, so post-takeoff forward speed = preForward + 0.2.
+        // Keeping preForward within the vanilla sprint range (<= 0.28) avoids
+        // "moved too quickly" / setback from server-side movement validation.
+        float targetPreJump;
+        if (dist >= 3.80) {
+            targetPreJump = 0.275f; // ~4 block: needs full sprint speed
+        } else if (dist >= 2.80) {
+            targetPreJump = 0.235f; // ~3 block
+        } else if (dist >= 1.85) {
+            targetPreJump = 0.175f; // ~2 block
+        } else {
+            targetPreJump = 0.115f; // ~1 block (walk-jump suffices)
+        }
+
+        if (diagonalTarget) targetPreJump += 0.018f;
+        if (height > 0.55) targetPreJump += 0.018f;
+        if (onEdge) targetPreJump += 0.012f;
+        if (config.isPreventOvershoot() && dist < 1.5) {
+            targetPreJump = Math.min(targetPreJump, 0.120f);
+        }
+
+        targetPreJump = MathHelper.clamp(targetPreJump, 0.08f, 0.282f);
+
+        // Apply at most ~0.045 m/tick of artificial boost so the per-tick position
+        // delta stays within what a vanilla sprint would produce.
+        if (preForward < targetPreJump) {
+            double boost = Math.min(targetPreJump - preForward, 0.045);
+            player.setVelocity(
+                    preVel.x + directionFlat.x * boost,
+                    preVel.y,
+                    preVel.z + directionFlat.z * boost
+            );
+        }
+
+        // Vanilla physics: y += 0.42; if sprinting, velocity += 0.2 * look.
         player.jump();
+
         jumpCooldown = dist >= 3.0 ? 7 : 6;
         ticksOnGround = 0;
         edgeTicks = 0;
         sprintCooldown = dist >= 3.0 ? 5 : 4;
-
-        Vec3d vel = player.getVelocity();
-
-        // Calibrated takeoff velocities. In Minecraft 1.21 a sprint jump with these
-        // initial horizontal speeds reaches approximately the corresponding tile count.
-        float targetSpeed;
-        if (dist >= 3.80) {
-            targetSpeed = 0.460f; // ~4 block jump
-        } else if (dist >= 2.80) {
-            targetSpeed = 0.395f; // ~3 block jump
-        } else if (dist >= 1.85) {
-            targetSpeed = 0.305f; // ~2 block jump
-        } else {
-            targetSpeed = 0.235f; // ~1 block jump
-        }
-
-        targetSpeed = Math.max(targetSpeed, jumpBoost);
-
-        if (diagonalTarget) {
-            targetSpeed += 0.020f;
-            if (onEdge) targetSpeed += 0.012f;
-        }
-
-        if (height > 0.55) targetSpeed += 0.022f;
-        if (height < -1.2) targetSpeed -= 0.015f;
-        if (config.isPreventOvershoot() && dist < 1.65) {
-            targetSpeed = Math.min(targetSpeed, 0.245f);
-        }
-
-        float maxSpeed = diagonalTarget ? 0.520f : 0.495f;
-        targetSpeed = MathHelper.clamp(targetSpeed, 0.18f, maxSpeed);
-
-        double forwardSpeed = vel.x * directionFlat.x + vel.z * directionFlat.z;
-        double sideX = vel.x - directionFlat.x * forwardSpeed;
-        double sideZ = vel.z - directionFlat.z * forwardSpeed;
-        // Set forward velocity directly to targetSpeed (keep existing velocity if it is
-        // already larger so we never slow the player down mid-takeoff).
-        double newForwardSpeed = Math.max(forwardSpeed, targetSpeed);
-        double sideRetention = diagonalTarget ? 0.70 : 0.55;
-
-        player.setVelocity(
-                directionFlat.x * newForwardSpeed + sideX * sideRetention,
-                vel.y,
-                directionFlat.z * newForwardSpeed + sideZ * sideRetention
-        );
     }
 
     private void moveTowards(ClientPlayerEntity player, Vec3d target, ModConfig config,
@@ -405,42 +416,51 @@ public class ParkourExecutor {
             }
         }
 
-        double speed = 0.145;
-        if (onEdge) speed = 0.175;
-        if (player.isSprinting()) speed += 0.035;
-        if (dist > 2.5) speed += 0.020;
-        if (dist > 3.4) speed += 0.012;
-        if (diagonalTarget && dist > 1.25) speed += 0.014;
-        if (dist < 1.0) speed = diagonalTarget ? 0.135 : 0.120;
-        speed = MathHelper.clamp(speed, 0.10, player.isOnGround() ? 0.235 : 0.300);
-
         if (!player.isOnGround()) {
-            speed *= MathHelper.clamp(airControl, 0.80f, 0.93f);
             Vec3d v = player.getVelocity();
-            double forwardSpeed = v.x * dx + v.z * dz;
-            double desiredForwardSpeed = speed;
 
-            if (dist > 2.7) desiredForwardSpeed = Math.max(desiredForwardSpeed, diagonalTarget ? 0.300 : 0.285);
-            if (dist < 1.15) desiredForwardSpeed = Math.min(desiredForwardSpeed, diagonalTarget ? 0.245 : 0.225);
-            desiredForwardSpeed = Math.min(desiredForwardSpeed, diagonalTarget ? 0.325 : 0.305);
+            // Use the takeoff direction instead of re-aiming each tick at the
+            // moving target. Re-aiming caused the velocity vector to swing in an
+            // arc around the target whenever the player got close to it, which
+            // looked like a wavy semicircle and undershot the landing.
+            boolean haveLock = lockedAirDirX != 0.0 || lockedAirDirZ != 0.0;
+            double useDx = haveLock ? lockedAirDirX : dx;
+            double useDz = haveLock ? lockedAirDirZ : dz;
 
-            double sideX = v.x - dx * forwardSpeed;
-            double sideZ = v.z - dz * forwardSpeed;
-            double addForward = MathHelper.clamp(desiredForwardSpeed - forwardSpeed, 0.0, diagonalTarget ? 0.026 : 0.022);
-            double sideRetention = diagonalTarget ? 0.70 : 0.78;
+            double forwardSpeed = v.x * useDx + v.z * useDz;
+            double sideX = v.x - useDx * forwardSpeed;
+            double sideZ = v.z - useDz * forwardSpeed;
+
+            // Vanilla W-press in air adds about 0.02 m/tick toward look direction.
+            double airAccel = 0.020 * MathHelper.clamp(airControl, 0.70f, 1.10f);
+
+            // Damp lateral drift gently so we still land on the target line.
+            double lateralKill = diagonalTarget ? 0.08 : 0.14;
 
             player.setVelocity(
-                    v.x + dx * addForward - sideX * (1.0 - sideRetention) * 0.35,
+                    v.x + useDx * airAccel - sideX * lateralKill,
                     v.y,
-                    v.z + dz * addForward - sideZ * (1.0 - sideRetention) * 0.35
+                    v.z + useDz * airAccel - sideZ * lateralKill
             );
             return;
         }
 
+        // Ground: ramp toward vanilla sprint speed (~0.28) so player.jump() can
+        // produce a full sprint-jump trajectory without us having to spike velocity
+        // at takeoff.
+        double speed = 0.145;
+        if (onEdge) speed = 0.175;
+        if (player.isSprinting()) speed += 0.060;
+        if (dist > 2.5) speed += 0.020;
+        if (dist > 3.4) speed += 0.012;
+        if (diagonalTarget && dist > 1.25) speed += 0.014;
+        if (dist < 1.0) speed = diagonalTarget ? 0.135 : 0.120;
+        speed = MathHelper.clamp(speed, 0.10, 0.282);
+
         Vec3d v = player.getVelocity();
         double desiredX = dx * speed;
         double desiredZ = dz * speed;
-        double maxDelta = diagonalTarget ? 0.030 : 0.026;
+        double maxDelta = diagonalTarget ? 0.032 : 0.028;
         double newX = v.x + MathHelper.clamp(desiredX - v.x, -maxDelta, maxDelta);
         double newZ = v.z + MathHelper.clamp(desiredZ - v.z, -maxDelta, maxDelta);
         player.setVelocity(newX, v.y, newZ);
@@ -466,6 +486,8 @@ public class ParkourExecutor {
         teleportDetected = false;
         teleportGraceTicks = 0;
         cameraLockTicks = 0;
+        lockedAirDirX = 0.0;
+        lockedAirDirZ = 0.0;
     }
 
 
@@ -481,6 +503,8 @@ public class ParkourExecutor {
         teleportDetected = true;
         teleportGraceTicks = 15;
         lockedTarget = null;
+        lockedAirDirX = 0.0;
+        lockedAirDirZ = 0.0;
         learning.onTeleport();
     }
 
